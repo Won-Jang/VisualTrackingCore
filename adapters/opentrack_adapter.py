@@ -1,0 +1,124 @@
+# UDP receiver adapter for pose data produced by the external opentrack app.
+
+import socket
+import struct
+import time
+
+from adapters.base import TrackingAdapter
+from tracking_types import TrackingResult
+
+
+class OpenTrackAdapter(TrackingAdapter):
+    # Receive 6-DOF head pose from opentrack's UDP output protocol.
+
+    name = "OpenTrack UDP"
+    uses_camera = False
+    DEFAULT_HOST = "127.0.0.1"
+    DEFAULT_PORT = 4242
+    PACKET_SIZE = 48  # six 64-bit doubles
+
+    def __init__(
+        self,
+        target_id: int | None = 0,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        stale_after_s: float = 0.75,
+    ):
+        super().__init__(target_id=0)
+        self.host = host
+        self.port = int(port)
+        self.stale_after_s = float(stale_after_s)
+        self._last_pose = None
+        self._last_packet_time = None
+
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.setblocking(False)
+
+        try:
+            self.socket.bind((self.host, self.port))
+        except OSError as exc:
+            self.socket.close()
+            raise RuntimeError(
+                f"Could not listen for OpenTrack UDP on {self.host}:{self.port}.\n\n"
+                "Make sure another program is not already using this UDP port."
+            ) from exc
+
+    def _receive_latest_pose(self):
+        # Drain queued datagrams and retain the newest valid pose packet.
+        while True:
+            try:
+                data, _address = self.socket.recvfrom(4096)
+            except BlockingIOError:
+                break
+
+            if len(data) < self.PACKET_SIZE:
+                continue
+
+            try:
+                # opentrack sends six native double values. The POC runs on
+                # Windows/x86-64, where this is little-endian IEEE-754.
+                pose = struct.unpack("<6d", data[: self.PACKET_SIZE])
+            except struct.error:
+                continue
+
+            self._last_pose = pose
+            self._last_packet_time = time.monotonic()
+
+    def detect(self, frame) -> list[TrackingResult]:
+        # Return the newest non-stale OpenTrack pose as a TrackingResult.
+        self._receive_latest_pose()
+
+        if self._last_pose is None or self._last_packet_time is None:
+            return []
+
+        if time.monotonic() - self._last_packet_time > self.stale_after_s:
+            return []
+
+        x, y, z, yaw, pitch, roll = self._last_pose
+
+        # OpenTrack owns the webcam. VisualTrackingCore therefore displays a
+        # synthetic coordinate view. Map X/Y into that view only for the UI;
+        # raw OpenTrack values are preserved separately below without unit
+        # conversion.
+        if frame is not None:
+            height, width = frame.shape[:2]
+        else:
+            width, height = 960, 540
+
+        frame_center_x = width / 2.0
+        frame_center_y = height / 2.0
+        visualization_scale = 3.0
+
+        center_x = max(20.0, min(width - 20.0, frame_center_x + x * visualization_scale))
+        center_y = max(20.0, min(height - 20.0, frame_center_y - y * visualization_scale))
+
+        half_size = 18.0
+        corners = [
+            (center_x - half_size, center_y - half_size),
+            (center_x + half_size, center_y - half_size),
+            (center_x + half_size, center_y + half_size),
+            (center_x - half_size, center_y + half_size),
+        ]
+
+        result = TrackingResult(
+            marker_id=0,
+            x_px=center_x - frame_center_x,
+            y_px=frame_center_y - center_y,
+            angle_deg=roll,
+            center_px=(center_x, center_y),
+            corners_px=corners,
+            yaw_deg=yaw,
+            pitch_deg=pitch,
+            roll_deg=roll,
+            source_x=x,
+            source_y=y,
+            source_z=z,
+        )
+
+        return [result]
+
+    def close(self) -> None:
+        # Close the UDP listener socket.
+        if getattr(self, "socket", None) is not None:
+            self.socket.close()
+            self.socket = None
