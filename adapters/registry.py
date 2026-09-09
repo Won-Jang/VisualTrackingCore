@@ -3,7 +3,6 @@
 from adapters.apriltag_adapter import AprilTagAdapter
 from adapters.aruco_adapter import ArUcoAdapter
 from adapters.mediapipe_adapter import MediaPipeFaceAdapter
-from adapters.opentrack_adapter import OpenTrackAdapter
 
 
 # Add a new adapter here to make it available in the main UI.
@@ -11,7 +10,6 @@ ADAPTERS = {
     AprilTagAdapter.name: AprilTagAdapter,
     ArUcoAdapter.name: ArUcoAdapter,
     MediaPipeFaceAdapter.name: MediaPipeFaceAdapter,
-    OpenTrackAdapter.name: OpenTrackAdapter,
 }
 
 

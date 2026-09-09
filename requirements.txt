@@ -3,3 +3,4 @@ numpy
 pillow
 pupil-apriltags
 mediapipe>=1.0.1
+pylsl

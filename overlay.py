@@ -3,7 +3,7 @@
 import cv2
 
 
-def draw_tracking_overlay(frame, result, trail=None):
+def draw_tracking_overlay(frame, result, trail=None, orientation_label=None):
     # Draw center, bounds, orientation, pose axes, values, and motion trail.
 
     height, width = frame.shape[:2]
@@ -69,8 +69,12 @@ def draw_tracking_overlay(frame, result, trail=None):
         lines = [
             f"ID: {result.marker_id}",
             f"X: {result.x_px:+.0f}px   Y: {result.y_px:+.0f}px",
-            f"Angle: {result.angle_deg:+.1f} deg",
         ]
+
+        if orientation_label is not None:
+            lines.append(
+                f"{orientation_label}: {result.angle_deg:+.1f} deg"
+            )
 
         if (
             result.yaw_deg is not None

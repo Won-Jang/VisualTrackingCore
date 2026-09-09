@@ -1,136 +1,179 @@
-# VisualTrackingCore V0.5
+# VisualTrackingCore V0.8.2
 
-Modular proof-of-concept framework for comparing head-tracking solutions through a common UI and adapter interface.
+VisualTrackingCore is a modular localization-response framework for spatial-hearing experiments. Different tracking technologies can be used to observe a participant, while the framework converts the observation into a common response direction relative to the speaker array.
 
-## Tracking adapters
+## Measurement model
 
-The main UI currently supports four interchangeable tracking adapters. We can adapt this main UI for the final product if we decide to use multiple adapters.
-
-### 1. AprilTag
-
-**Type:** Marker-based webcam tracking  
-**Best for:** Stable, repeatable position tracking when the participant can wear or carry a printed marker.
-
-- Uses the `pupil-apriltags` detector.
-- Default tag family: `tagStandard41h12`.
-- The included sample marker uses ID `0`.
-- Detects the marker center and orientation from the webcam image.
-- A specific marker ID can be selected so other visible tags are ignored.
-- Requires a clearly visible printed AprilTag with reasonable lighting and camera focus.
-
-Sample marker files are included in the `markers/` folder.
+V0.8.2 separates **sensor tracking data** from the **experimental localization response**.
 
 ```text
-Additional References/Notes
-- GitHub Link: https://github.com/AprilRobotics/apriltag
-- Pre-generated images: https://github.com/AprilRobotics/apriltag-imgs
-- Conversion program: ./tools/tag_to_svg.py
+AprilTag / ArUco / MediaPipe / PointTracker
+                         |
+                         v
+                  TrackingFrame
+              raw normalized sensor pose
+                         |
+                         v
+               ResponseResolver
+              calibrated 0° reference
+                         |
+                         v
+             LocalizationResponse
+        speaker-array-relative response
+                         |
+                +--------+--------+
+                |                 |
+                v                 v
+        LSL Tracking       LSL Response
 ```
 
-### 2. ArUco
-
-**Type:** Marker-based webcam tracking  
-**Best for:** Simple OpenCV-based marker experiments and easy generation of custom marker IDs.
-
-- Uses OpenCV's built-in ArUco detector.
-- Default dictionary: `DICT_4X4_50`.
-- The included sample marker uses ID `0`.
-- Detects marker center and orientation from the webcam image.
-- A specific marker ID can be selected for tracking.
-- New markers can be generated with `tools/generate_aruco.py`.
+The primary experiment-facing measurement is:
 
 ```text
-Additional References/Notes
-This adapter is similar in purpose to AprilTag, but relies entirely on OpenCV's ArUco implementation.
-- GitHub Link: https://github.com/tentone/ARUCO
-- Created the sample tag and resized in the separated program (Microsoft Word) 
+response_azimuth_deg
 ```
 
-### 3. MediaPipe Face
+`0°` is the participant's calibrated forward direction / speaker-array center. Elevation is included in the response model for future 3-D localization tasks but is not yet resolved by the current V0.8 calibration path.
 
-**Type:** Markerless webcam tracking  
-**Best for:** Tracking a participant without requiring a hat, tag, or physical marker.
+## Two core data models
 
-- Uses MediaPipe Face Landmarker.
-- Detects one face at a time.
-- Uses facial landmarks and OpenCV `solvePnP` to estimate approximate head pose.
-- Reports head position/orientation through the same `TrackingResult` interface used by the marker adapters.
-- Requires the `models/face_landmarker.task` model file; the current package includes it.
-- Performance can vary with face angle, lighting, occlusion, and camera placement.
+### TrackingFrame
+
+Represents what the selected tracking technology measured.
 
 ```text
-Additional References/Notes
-This is the primary markerless proof-of-concept adapter in the current project.
-- GitHub Link: https://github.com/google-ai-edge/mediapipe
+timestamp
+source
+target_id
+tracking_valid
+confidence
+x / y / z
+position_unit
+yaw_deg / pitch_deg / roll_deg
 ```
 
-### 4. OpenTrack UDP
+Current adapter behavior:
 
-**Type:** External 6-DOF tracking input  
-**Best for:** Using opentrack or another tracking pipeline while keeping VisualTrackingCore as the common display/integration layer.
+| Adapter | Tracking orientation used for localization response |
+|---|---|
+| AprilTag | In-plane marker rotation (`roll_deg`) |
+| ArUco | In-plane marker rotation (`roll_deg`) |
+| MediaPipe Face | Estimated head `yaw_deg` |
+| PointTracker | Planned |
 
-- opentrack runs as a separate application and owns its webcam/tracking hardware.
-- VisualTrackingCore receives processed pose data over UDP.
-- No webcam is opened by VisualTrackingCore when this adapter is selected.
-- Default UDP listener: `127.0.0.1:4242`.
-- Receives six values: `X, Y, Z, Yaw, Pitch, Roll`.
-- Yaw/Pitch/Roll are displayed in degrees.
-- X/Y/Z are preserved exactly as sent by opentrack; no translation-unit conversion is applied.
-- The UI shows a synthetic coordinate preview because the original camera image belongs to opentrack.
+For AprilTag and ArUco, this mapping assumes an overhead-camera arrangement where marker rotation in the image corresponds to horizontal head orientation. This should be verified experimentally for the final camera geometry.
+
+### LocalizationResponse
+
+Represents the experiment-facing response rather than raw tracker pose.
 
 ```text
-Additional References/Notes
-- GitHub Link: https://github.com/opentrack/opentrack
-- Windows Only
-- Standardalone program
-
-#### OpenTrack setup
-
-In opentrack:
-
-1. Select the desired tracker, for example **NeuralNet tracker**.
-2. Set **Output** to **UDP over network**.
-3. Configure:
-
-IP address: 127.0.0.1
-Port:       4242
-
-4. Start tracking in opentrack.
-5. In VisualTrackingCore select **OpenTrack UDP**.
-6. Leave the UDP port at **4242** and click **Start**.
+timestamp
+source
+response_method
+response_valid
+confidence
+response_azimuth_deg
+response_elevation_deg
+target_id
 ```
 
+The response model intentionally does **not** contain the stimulus speaker ID, target angle, or localization error. Those are trial/experiment variables and should remain in the experimental software. VisualTrackingCore reports what direction the participant indicated.
 
-## Main program screenshots
+## V0.8.2 terminology update
 
-The `main.py` application provides a common user interface for selecting and testing the available tracking adapters.
+The UI now distinguishes the physical orientation measurement used by each tracker:
 
-### 1. Main window
+- **AprilTag / ArUco:** `Marker rotation` (2-D in-plane rotation in the camera image)
+- **MediaPipe:** `Yaw`
+- **Response azimuth:** the calibrated experiment-facing angle relative to speaker-array `0°`
 
-The main window allows the user to select a tracking solution and configure adapter-specific options. The current V0.5 interface includes **AprilTag**, **ArUco**, **MediaPipe Face**, and **OpenTrack UDP**.
+This avoids describing the paper-marker measurement as generic `Angle` or full 3-D `Roll`.
 
-![VisualTrackingCore main window](docs/images/main_ui.png)
+## Calibration
 
-### 2. AprilTag tracking
+While tracking is running:
 
-Example of the **AprilTag** adapter running from the common UI. The live camera preview shows the detected marker, marker ID, X/Y offset from the image center, orientation angle, and movement trail.
+1. Ask the participant to face the speaker-array center / intended `0°` direction.
+2. Click **Set 0° Reference**.
+3. VisualTrackingCore stores the current orientation as the reference.
+4. Subsequent orientations are converted to signed azimuth relative to that reference.
 
-![AprilTag tracking example](docs/images/apriltag_tracking.png)
+Example:
 
-### 3. ArUco tracking
+```text
+Calibration yaw:       +13.2°
+Current yaw:           +48.5°
+Response azimuth:      +35.3°
+```
 
-Example of the **ArUco** adapter using the same main interface. The detected ArUco marker is highlighted in the camera preview and the current marker ID, X/Y offset, and orientation angle are displayed.
+Angles are wrapped to the range `[-180°, 180°)`.
 
-![ArUco tracking example](docs/images/aruco_tracking.png)
+## LSL outputs
 
-## Quick comparison
+When LSL is enabled, V0.8.2 creates two independent streams.
 
-| Adapter | Marker Required | Camera Used by VisualTrackingCore | Main Purpose |
-|---|---|---|---|
-| AprilTag | Yes | Yes | Robust printed-tag tracking |
-| ArUco | Yes | Yes | OpenCV marker tracking |
-| MediaPipe Face | No | Yes | Markerless face/head tracking |
-| OpenTrack UDP | Depends on opentrack tracker | No | External 6-DOF tracking integration |
+### VisualTrackingCore_Tracking
+
+Raw normalized tracking stream:
+
+```text
+x
+y
+z
+yaw
+pitch
+roll
+confidence
+tracking_valid
+target_id
+```
+
+Unavailable values are `NaN`. Tracking loss is explicit with `tracking_valid = 0`.
+
+### VisualTrackingCore_Response
+
+Experiment-facing response stream:
+
+```text
+response_azimuth
+response_elevation
+confidence
+response_valid
+target_id
+```
+
+Before calibration, or when the tracker is lost, `response_valid = 0` and unavailable response angles are `NaN`.
+
+The response stream can therefore be consumed by MATLAB/Python experimental code without needing to understand whether the source was AprilTag, ArUco, MediaPipe, or a future PointTracker adapter.
+
+## Project structure
+
+```text
+VisualTrackingCore/
+├── main.py
+├── camera.py
+├── tracking_types.py
+├── adapters/
+│   ├── base.py
+│   ├── apriltag_adapter.py
+│   ├── aruco_adapter.py
+│   ├── mediapipe_adapter.py
+│   └── registry.py
+├── core/
+│   ├── tracking_frame.py
+│   ├── localization_response.py
+│   ├── response_resolver.py
+│   └── tracking_engine.py
+├── outputs/
+│   ├── base.py
+│   ├── lsl_output.py
+│   └── lsl_response_output.py
+├── models/
+├── markers/
+├── tools/
+└── tests/
+```
 
 ## Setup
 
@@ -144,18 +187,104 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-## Common adapter design
+## Basic V0.8 test procedure
 
-All adapters derive from `TrackingAdapter` and return `TrackingResult` objects. This keeps the main UI independent from the specific tracking technology.
+1. Start `main.py`.
+2. Select a tracker.
+3. Keep LSL enabled if LabRecorder/another LSL client will be used.
+4. Click **Start**.
+5. Confirm raw tracking values update.
+6. Face the center speaker / reference direction.
+7. Click **Set 0° Reference**.
+8. Rotate toward known speaker angles.
+9. Compare `Response azimuth` with the known speaker positions.
+10. Confirm both `VisualTrackingCore_Tracking` and `VisualTrackingCore_Response` appear in the LSL client.
 
-Camera-based adapters receive frames from the common camera layer. External tracking solutions can set `uses_camera = False` and provide their own input transport, as demonstrated by the OpenTrack UDP adapter.
+## V0.8.0 changes
 
-## Adding another adapter
+- Added `LocalizationResponse` experiment-facing data model.
+- Added `ResponseResolver` calibration layer.
+- Added speaker-array-relative `response_azimuth_deg`.
+- Added angle wrapping across ±180°.
+- Added **Set 0° Reference** control to the UI.
+- Added live response-azimuth display.
+- Split LSL into raw Tracking and calibrated Response streams.
+- Preserved V0.7 tracker adapters and raw tracking behavior.
+- Added tests for calibration, invalid tracking, response routing, and angle wrapping.
 
-Create a class derived from `TrackingAdapter`, implement the required detection behavior, and register it in:
+## Next development steps
+
+1. Bench-test known angles (for example 0°, ±30°, ±60°, ±90°) for each current adapter.
+2. Confirm/sign-correct the physical left/right azimuth convention for the actual camera/speaker geometry.
+3. Add response capture/confirmation semantics (continuous vs participant/experimenter capture event).
+4. Add PointTracker as another input adapter.
+5. Add optional speaker-array configuration and validation tools without coupling stimulus presentation to the tracking core.
+6. Add other output adapters only when required.
+
+##
+
+## ###In Development Below - FILL/FIX ME###
+
+### Some Notes
+
+- For our AprilTag/ArUco head-tracking setup, make the tag as large as you reasonably can while still fitting comfortably on the head/cap.
+- Tag width ≈ 1/20 to 1/30 of the camera-to-tag distance
+
+1. at 0.5 m distance → ~20–30 mm can work
+2. at 1 m distance → ~40–60 mm is safer
+3. at 1.5 m distance → ~60–80 mm is better
 
 ```text
-adapters/registry.py
+AprilTag / ArUco test tag:
+50 mm × 50 mm active tag area
+~60–70 mm total printed card
 ```
 
-The adapter will then be available through the same main UI architecture.
+### ArUco Marker Generator
+
+`generate_aruco.py` creates a printable ArUco marker using the `DICT_4X4_50` dictionary.
+
+Default:
+
+```powershell
+python generate_aruco.py
+```
+
+Generates:
+
+```text
+aruco_4x4_50_id0.png
+```
+
+Default values:
+
+Marker ID: 0
+Image size: 1000 × 1000 pixels
+
+Optional parameters:
+
+```powershell
+python generate_aruco.py --id 5 --size 1500 --output my_marker.png
+```
+
+- `--id` marker ID
+- `--size` image size in pixels
+- `--output` output filename
+
+The printed marker ID must match the ID selected in VisualTrackingCore.
+
+### AprilTag-imgs
+=============
+
+Images of all tags from all the pre-generated [AprilTag 3](https://github.com/AprilRobotics/apriltags) families. You can generate your own layouts or images of tags using our other repo, [AprilTag-generation](https://github.com/AprilRobotics/apriltag-generation).
+
+If the format of the markers is very small (ex : by default, 9x9 pixels), you'll need to rescale them. To do so, you may use the following imagemagick command (Unix) : 
+
+~~~
+convert <small_marker>.png -scale <scale_chosen_in_percent>% <big_marker>.png
+~~~
+
+Alternately, you can use the supplied native Python 3 script `tag_to_svg.py` to create a SVG (Scalable Vector Graphics) Version of a tag. For example:
+~~~
+python ./tools/tag_to_svg.py ./markers/tag41_12_00000.png ./markers/tag41_12_00000.svg --size=50mm
+~~~

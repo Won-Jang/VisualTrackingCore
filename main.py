@@ -5,11 +5,12 @@ from tkinter import ttk, messagebox
 from collections import deque
 
 import cv2
-import numpy as np
 from PIL import Image, ImageTk
 
 from adapters import adapter_names, create_adapter
 from camera import Camera
+from core import ResponseResolver, TrackingEngine
+from outputs import LSLOutputAdapter, LSLResponseOutputAdapter
 from overlay import draw_tracking_overlay
 
 
@@ -23,16 +24,21 @@ class VisualTrackingApp:
 
         self.camera = Camera()
         self.adapter = None
+        self.engine = TrackingEngine()
         self.running = False
         self.trail = deque(maxlen=50)
 
         self.solution_var = tk.StringVar(value=adapter_names()[0])
         self.camera_var = tk.StringVar(value="0")
-        self.udp_port_var = tk.StringVar(value="4242")
         self.target_id_var = tk.StringVar(value="0")
+        self.lsl_enabled_var = tk.BooleanVar(value=True)
+        self.lsl_stream_name_var = tk.StringVar(value="VisualTrackingCore_Tracking")
+        self.lsl_response_stream_name_var = tk.StringVar(value="VisualTrackingCore_Response")
 
         self.status_var = tk.StringVar(value="Stopped")
         self.position_var = tk.StringVar(value="No detection")
+        self.response_var = tk.StringVar(value="Response: not calibrated")
+        self.calibration_var = tk.StringVar(value="Reference: not set")
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -71,14 +77,6 @@ class VisualTrackingApp:
         )
         self.camera_entry.grid(row=0, column=3, padx=5, pady=5)
 
-        self.udp_port_entry = ttk.Entry(
-            controls,
-            textvariable=self.udp_port_var,
-            width=6,
-        )
-        self.udp_port_entry.grid(row=0, column=3, padx=5, pady=5)
-        self.udp_port_entry.grid_remove()
-
         self.target_id_label = ttk.Label(controls, text="Target ID:")
         self.target_id_label.grid(
             row=0, column=4, padx=5, pady=5, sticky="w"
@@ -112,6 +110,71 @@ class VisualTrackingApp:
             command=self.trail.clear,
         ).grid(row=0, column=8, padx=5, pady=5)
 
+        output_controls = ttk.LabelFrame(
+            self.root,
+            text="Output",
+            padding=(10, 6),
+        )
+        output_controls.pack(fill="x", padx=10, pady=(0, 6))
+
+        self.lsl_check = ttk.Checkbutton(
+            output_controls,
+            text="LSL",
+            variable=self.lsl_enabled_var,
+        )
+        self.lsl_check.grid(row=0, column=0, padx=(0, 12), pady=2, sticky="w")
+
+        ttk.Label(output_controls, text="Stream name:").grid(
+            row=0, column=1, padx=(0, 5), pady=2, sticky="w"
+        )
+        self.lsl_stream_entry = ttk.Entry(
+            output_controls,
+            textvariable=self.lsl_stream_name_var,
+            width=28,
+        )
+        self.lsl_stream_entry.grid(row=0, column=2, padx=5, pady=2, sticky="w")
+
+        ttk.Label(
+            output_controls,
+            text="Tracking stream: X/Y/Z + orientation + status",
+        ).grid(row=0, column=3, padx=12, pady=2, sticky="w")
+
+        ttk.Label(output_controls, text="Response stream:").grid(
+            row=1, column=1, padx=(0, 5), pady=2, sticky="w"
+        )
+        self.lsl_response_stream_entry = ttk.Entry(
+            output_controls,
+            textvariable=self.lsl_response_stream_name_var,
+            width=28,
+        )
+        self.lsl_response_stream_entry.grid(row=1, column=2, padx=5, pady=2, sticky="w")
+        ttk.Label(
+            output_controls,
+            text="Azimuth/Elevation + confidence + response valid",
+        ).grid(row=1, column=3, padx=12, pady=2, sticky="w")
+
+        calibration_controls = ttk.LabelFrame(
+            self.root,
+            text="Localization Response Calibration",
+            padding=(10, 6),
+        )
+        calibration_controls.pack(fill="x", padx=10, pady=(0, 6))
+
+        self.calibrate_button = ttk.Button(
+            calibration_controls,
+            text="Set 0° Reference",
+            command=self.calibrate_reference,
+            state="disabled",
+        )
+        self.calibrate_button.grid(row=0, column=0, padx=(0, 10), pady=2)
+        ttk.Label(calibration_controls, textvariable=self.calibration_var).grid(
+            row=0, column=1, padx=5, pady=2, sticky="w"
+        )
+        ttk.Label(calibration_controls, text="   |   ").grid(row=0, column=2)
+        ttk.Label(calibration_controls, textvariable=self.response_var).grid(
+            row=0, column=3, padx=5, pady=2, sticky="w"
+        )
+
         info = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         info.pack(fill="x")
 
@@ -128,18 +191,11 @@ class VisualTrackingApp:
         # Show only the controls relevant to the selected adapter.
         solution = self.solution_var.get()
         is_mediapipe = solution == "MediaPipe Face"
-        is_opentrack = solution == "OpenTrack UDP"
 
-        if is_opentrack:
-            self.input_label.config(text="UDP port:")
-            self.camera_entry.grid_remove()
-            self.udp_port_entry.grid()
-        else:
-            self.input_label.config(text="Camera index:")
-            self.udp_port_entry.grid_remove()
-            self.camera_entry.grid()
+        self.input_label.config(text="Camera index:")
+        self.camera_entry.grid()
 
-        if is_mediapipe or is_opentrack:
+        if is_mediapipe:
             self.target_id_entry.config(state="disabled")
             self.target_id_label.config(text="Target ID: (N/A)")
         else:
@@ -155,43 +211,93 @@ class VisualTrackingApp:
 
         return int(text)
 
+    @staticmethod
+    def _response_resolver_for_solution(solution):
+        # Overhead paper-marker trackers use in-plane marker rotation as
+        # horizontal response orientation. MediaPipe provides yaw directly.
+        if solution in ("AprilTag", "ArUco"):
+            axis = "roll"
+            orientation_label = "Marker rotation"
+        else:
+            axis = "yaw"
+            orientation_label = "Yaw"
+
+        return ResponseResolver(
+            response_method="head_orientation",
+            orientation_axis=axis,
+            sign=1.0,
+            orientation_label=orientation_label,
+        )
+
+    def calibrate_reference(self):
+        # Define the participant's current orientation as speaker-array 0 degrees.
+        try:
+            reference = self.engine.calibrate_current()
+        except Exception as exc:
+            messagebox.showerror("Calibration failed", str(exc))
+            return
+
+        orientation_label = self.engine.response_resolver.orientation_label
+        self.calibration_var.set(
+            f"Reference: {orientation_label} {reference:+.1f}° = speaker-array 0°"
+        )
+
     def start_tracking(self):
         # Create the selected adapter and start the UI update loop.
         if self.running:
             return
 
         solution = self.solution_var.get()
-        is_opentrack = solution == "OpenTrack UDP"
 
         try:
-            if solution in ("MediaPipe Face", "OpenTrack UDP"):
+            if solution == "MediaPipe Face":
                 target_id = 0
             else:
                 target_id = self._parse_target_id()
 
-            if is_opentrack:
-                # OpenTrack owns its webcam, so this app only opens a UDP listener.
-                udp_port = int(self.udp_port_var.get())
-                if not 1 <= udp_port <= 65535:
-                    raise ValueError("UDP port must be between 1 and 65535.")
+            # All current adapters are camera-based and process frames captured
+            # by VisualTrackingCore.
+            camera_index = int(self.camera_var.get())
+            self.adapter = create_adapter(
+                solution,
+                target_id=target_id,
+            )
+            self.camera.open(camera_index)
+            input_text = f"Camera {camera_index}"
 
-                self.adapter = create_adapter(
-                    solution,
-                    target_id=target_id,
-                    port=udp_port,
+            self.engine = TrackingEngine()
+            self.engine.configure_input(self.adapter)
+            self.engine.configure_response_resolver(
+                self._response_resolver_for_solution(solution)
+            )
+
+            output_names = []
+            if self.lsl_enabled_var.get():
+                tracking_output = LSLOutputAdapter(
+                    stream_name=self.lsl_stream_name_var.get(),
+                    source_name=self.adapter.name,
+                    position_unit=(
+                        self.adapter.position_unit
+                        if not self.adapter.uses_camera
+                        else "px"
+                    ),
                 )
-                input_text = f"UDP 127.0.0.1:{udp_port}"
-            else:
-                # Camera-based adapters process frames captured by this application.
-                camera_index = int(self.camera_var.get())
-                self.adapter = create_adapter(
-                    solution,
-                    target_id=target_id,
+                response_output = LSLResponseOutputAdapter(
+                    stream_name=self.lsl_response_stream_name_var.get(),
+                    source_name=self.adapter.name,
+                    response_method="head_orientation",
                 )
-                self.camera.open(camera_index)
-                input_text = f"Camera {camera_index}"
+                self.engine.add_tracking_output(tracking_output)
+                self.engine.add_response_output(response_output)
+                output_names.extend(["LSL Tracking", "LSL Response"])
+
+            self.engine.start()
+            output_text = ", ".join(output_names) if output_names else "None"
 
         except Exception as exc:
+            if getattr(self, "engine", None) is not None:
+                self.engine.stop()
+
             if self.adapter is not None:
                 self.adapter.close()
                 self.adapter = None
@@ -203,17 +309,28 @@ class VisualTrackingApp:
         self.running = True
         self.trail.clear()
 
-        self.status_var.set(f"Running: {solution} / {input_text}")
+        self.status_var.set(
+            f"Running: {solution} / {input_text} / Output: {output_text}"
+        )
+        self.calibration_var.set("Reference: not set")
+        self.response_var.set("Response: not calibrated")
 
         self.start_button.config(state="disabled")
         self.stop_button.config(state="normal")
         self.solution_combo.config(state="disabled")
+        self.lsl_check.config(state="disabled")
+        self.lsl_stream_entry.config(state="disabled")
+        self.lsl_response_stream_entry.config(state="disabled")
+        self.calibrate_button.config(state="normal")
 
         self._update_frame()
 
     def stop_tracking(self):
         # Stop tracking and release camera/adapter resources.
         self.running = False
+
+        if getattr(self, "engine", None) is not None:
+            self.engine.stop()
 
         self.camera.close()
 
@@ -223,59 +340,28 @@ class VisualTrackingApp:
 
         self.status_var.set("Stopped")
         self.position_var.set("No detection")
+        self.response_var.set("Response: not calibrated")
+        self.calibration_var.set("Reference: not set")
 
         self.start_button.config(state="normal")
         self.stop_button.config(state="disabled")
         self.solution_combo.config(state="readonly")
-
-    @staticmethod
-    def _opentrack_visualization_frame():
-        # Create a synthetic canvas because OpenTrack displays its own webcam.
-        frame = np.zeros((540, 960, 3), dtype=np.uint8)
-        height, width = frame.shape[:2]
-
-        # Simple coordinate grid for external OpenTrack data.
-        for x in range(0, width, 80):
-            cv2.line(frame, (x, 0), (x, height), (45, 45, 45), 1)
-        for y in range(0, height, 60):
-            cv2.line(frame, (0, y), (width, y), (45, 45, 45), 1)
-
-        cv2.putText(
-            frame,
-            "OpenTrack UDP - external camera/tracker",
-            (20, height - 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (180, 180, 180),
-            2,
-        )
-        cv2.putText(
-            frame,
-            "Configure OpenTrack Output: UDP over network -> 127.0.0.1:4242",
-            (20, height - 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (180, 180, 180),
-            1,
-        )
-        return frame
+        self.lsl_check.config(state="normal")
+        self.lsl_stream_entry.config(state="normal")
+        self.lsl_response_stream_entry.config(state="normal")
+        self.calibrate_button.config(state="disabled")
 
     def _update_frame(self):
         # Acquire/detect/draw one frame and schedule the next UI refresh.
         if not self.running:
             return
 
-        is_opentrack = self.solution_var.get() == "OpenTrack UDP"
+        ok, frame = self.camera.read()
 
-        if is_opentrack:
-            frame = self._opentrack_visualization_frame()
-        else:
-            ok, frame = self.camera.read()
-
-            if not ok:
-                self.stop_tracking()
-                messagebox.showerror("Camera error", "Could not read camera frame.")
-                return
+        if not ok:
+            self.stop_tracking()
+            messagebox.showerror("Camera error", "Could not read camera frame.")
+            return
 
         try:
             results = self.adapter.detect(frame)
@@ -284,7 +370,26 @@ class VisualTrackingApp:
             messagebox.showerror("Tracking error", str(exc))
             return
 
-        # The current POC UI visualizes one primary result at a time.
+        # Normalize all results and publish them through enabled output adapters.
+        # The UI still visualizes only one primary result at a time.
+        try:
+            _frames, responses = self.engine.process_results(results)
+        except Exception as exc:
+            self.stop_tracking()
+            messagebox.showerror("Output error", str(exc))
+            return
+
+
+        response = responses[0] if responses else None
+        if response is not None and response.response_valid:
+            self.response_var.set(
+                f"Response azimuth: {response.response_azimuth_deg:+.1f}°"
+            )
+        elif self.engine.response_resolver and self.engine.response_resolver.calibrated:
+            self.response_var.set("Response: tracking invalid")
+        else:
+            self.response_var.set("Response: not calibrated")
+
         result = results[0] if results else None
 
         if result is not None:
@@ -294,61 +399,53 @@ class VisualTrackingApp:
             )
             self.trail.append(center)
 
-            if is_opentrack:
-                self.position_var.set(
-                    f"OpenTrack | "
-                    f"X {result.source_x:+.2f} | "
-                    f"Y {result.source_y:+.2f} | "
-                    f"Z {result.source_z:+.2f} | "
-                    f"Yaw {result.yaw_deg:+.1f}° | "
-                    f"Pitch {result.pitch_deg:+.1f}° | "
-                    f"Roll {result.roll_deg:+.1f}°"
-                )
-            else:
-                id_text = (
-                    "Face"
-                    if self.solution_var.get() == "MediaPipe Face"
-                    else f"ID {result.marker_id}"
-                )
-
-                if (
-                    result.yaw_deg is not None
-                    and result.pitch_deg is not None
-                    and result.roll_deg is not None
-                ):
-                    pose_text = (
-                        f" | Yaw {result.yaw_deg:+.1f}°"
-                        f" | Pitch {result.pitch_deg:+.1f}°"
-                        f" | Roll {result.roll_deg:+.1f}°"
-                    )
-                else:
-                    pose_text = ""
-
-                self.position_var.set(
-                    f"{id_text} | "
-                    f"X {result.x_px:+.0f}px | "
-                    f"Y {result.y_px:+.0f}px | "
-                    f"Angle {result.angle_deg:+.1f}°"
-                    f"{pose_text}"
-                )
-        else:
-            if is_opentrack:
-                self.position_var.set("Waiting for OpenTrack UDP data...")
-            else:
-                self.position_var.set("Target not detected")
-
-        draw_tracking_overlay(frame, result, self.trail)
-
-        if is_opentrack and result is not None:
-            cv2.putText(
-                frame,
-                f"Raw XYZ: {result.source_x:+.2f}, {result.source_y:+.2f}, {result.source_z:+.2f}",
-                (20, 185),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
+            id_text = (
+                "Face"
+                if self.solution_var.get() == "MediaPipe Face"
+                else f"ID {result.marker_id}"
             )
+
+            if (
+                result.yaw_deg is not None
+                and result.pitch_deg is not None
+                and result.roll_deg is not None
+            ):
+                pose_text = (
+                    f" | Yaw {result.yaw_deg:+.1f}°"
+                    f" | Pitch {result.pitch_deg:+.1f}°"
+                    f" | Roll {result.roll_deg:+.1f}°"
+                )
+            else:
+                pose_text = ""
+
+            if self.solution_var.get() in ("AprilTag", "ArUco"):
+                orientation_text = (
+                    f" | Marker rotation {result.angle_deg:+.1f}°"
+                )
+            else:
+                orientation_text = ""
+
+            self.position_var.set(
+                f"{id_text} | "
+                f"X {result.x_px:+.0f}px | "
+                f"Y {result.y_px:+.0f}px"
+                f"{orientation_text}"
+                f"{pose_text}"
+            )
+        else:
+            self.position_var.set("Target not detected")
+
+        marker_rotation_label = (
+            "Marker rotation"
+            if self.solution_var.get() in ("AprilTag", "ArUco")
+            else None
+        )
+        draw_tracking_overlay(
+            frame,
+            result,
+            self.trail,
+            orientation_label=marker_rotation_label,
+        )
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)

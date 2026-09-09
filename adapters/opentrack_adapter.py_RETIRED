@@ -13,6 +13,7 @@ class OpenTrackAdapter(TrackingAdapter):
 
     name = "OpenTrack UDP"
     uses_camera = False
+    position_unit = "source_units"
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 4242
     PACKET_SIZE = 48  # six 64-bit doubles
