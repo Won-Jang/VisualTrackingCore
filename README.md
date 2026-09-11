@@ -187,6 +187,18 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+From Bash:
+
+```Bash
+brew install python@3.13
+brew install python-tk@3.13
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python main.py
+```
+
 ## Basic V0.8 test procedure
 
 1. Start `main.py`.
