@@ -2,6 +2,78 @@
 
 VisualTrackingCore is a modular localization-response framework for spatial-hearing experiments. Different tracking technologies can be used to observe a participant, while the framework converts the observation into a common response direction relative to the speaker array.
 
+## ###In Development Below - FILL/FIX ME###
+
+### Some Notes
+
+- For our AprilTag/ArUco head-tracking setup, make the tag as large as you reasonably can while still fitting comfortably on the head/cap.
+- Tag width ≈ 1/20 to 1/30 of the camera-to-tag distance
+
+1. at 0.5 m distance → ~20–30 mm can work
+2. at 1 m distance → ~40–60 mm is safer
+3. at 1.5 m distance → ~60–80 mm is better
+
+```text
+AprilTag / ArUco test tag:
+50 mm × 50 mm active tag area
+~60–70 mm total printed card
+```
+
+### ArUco Marker Generator
+
+`generate_aruco.py` creates a printable ArUco marker using the `DICT_4X4_50` dictionary.
+
+Default:
+
+```powershell
+python generate_aruco.py
+```
+
+Generates:
+
+```text
+aruco_4x4_50_id0.png
+```
+
+Default values:
+
+Marker ID: 0
+Image size: 1000 × 1000 pixels
+
+Optional parameters:
+
+```powershell
+python generate_aruco.py --id 5 --size 1500 --output my_marker.png
+```
+
+- `--id` marker ID
+- `--size` image size in pixels
+- `--output` output filename
+
+The printed marker ID must match the ID selected in VisualTrackingCore.
+
+### AprilTag-imgs
+=============
+
+Images of all tags from all the pre-generated [AprilTag 3](https://github.com/AprilRobotics/apriltags) families. You can generate your own layouts or images of tags using our other repo, [AprilTag-generation](https://github.com/AprilRobotics/apriltag-generation).
+
+If the format of the markers is very small (ex : by default, 9x9 pixels), you'll need to rescale them. To do so, you may use the following imagemagick command (Unix) : 
+
+~~~
+convert <small_marker>.png -scale <scale_chosen_in_percent>% <big_marker>.png
+~~~
+
+Alternately, you can use the supplied native Python 3 script `tag_to_svg.py` to create a SVG (Scalable Vector Graphics) Version of a tag. For example:
+~~~
+python ./tools/tag_to_svg.py ./markers/tag41_12_00000.png ./markers/tag41_12_00000.svg --size=50mm
+~~~
+
+[AprilTag tracking]
+![AprilTag tracking example](docs/images/apriltag_tracking.png)
+
+[ArUco tracking]
+![ArUco tracking example](docs/images/aruco_tracking.png)
+
 ## Measurement model
 
 V0.8.2 separates **sensor tracking data** from the **experimental localization response**.
@@ -235,68 +307,3 @@ python main.py
 
 ##
 
-## ###In Development Below - FILL/FIX ME###
-
-### Some Notes
-
-- For our AprilTag/ArUco head-tracking setup, make the tag as large as you reasonably can while still fitting comfortably on the head/cap.
-- Tag width ≈ 1/20 to 1/30 of the camera-to-tag distance
-
-1. at 0.5 m distance → ~20–30 mm can work
-2. at 1 m distance → ~40–60 mm is safer
-3. at 1.5 m distance → ~60–80 mm is better
-
-```text
-AprilTag / ArUco test tag:
-50 mm × 50 mm active tag area
-~60–70 mm total printed card
-```
-
-### ArUco Marker Generator
-
-`generate_aruco.py` creates a printable ArUco marker using the `DICT_4X4_50` dictionary.
-
-Default:
-
-```powershell
-python generate_aruco.py
-```
-
-Generates:
-
-```text
-aruco_4x4_50_id0.png
-```
-
-Default values:
-
-Marker ID: 0
-Image size: 1000 × 1000 pixels
-
-Optional parameters:
-
-```powershell
-python generate_aruco.py --id 5 --size 1500 --output my_marker.png
-```
-
-- `--id` marker ID
-- `--size` image size in pixels
-- `--output` output filename
-
-The printed marker ID must match the ID selected in VisualTrackingCore.
-
-### AprilTag-imgs
-=============
-
-Images of all tags from all the pre-generated [AprilTag 3](https://github.com/AprilRobotics/apriltags) families. You can generate your own layouts or images of tags using our other repo, [AprilTag-generation](https://github.com/AprilRobotics/apriltag-generation).
-
-If the format of the markers is very small (ex : by default, 9x9 pixels), you'll need to rescale them. To do so, you may use the following imagemagick command (Unix) : 
-
-~~~
-convert <small_marker>.png -scale <scale_chosen_in_percent>% <big_marker>.png
-~~~
-
-Alternately, you can use the supplied native Python 3 script `tag_to_svg.py` to create a SVG (Scalable Vector Graphics) Version of a tag. For example:
-~~~
-python ./tools/tag_to_svg.py ./markers/tag41_12_00000.png ./markers/tag41_12_00000.svg --size=50mm
-~~~
