@@ -2,6 +2,20 @@
 
 VisualTrackingCore is a modular localization-response framework for spatial-hearing experiments. Different tracking technologies can be used to observe a participant, while the framework converts the observation into a common response direction relative to the speaker array.
 
+
+[AprilTag tracking]
+![AprilTag TestBench](docs/images/setup.png)
+![AprilTag 0 Degree](docs/images/0.png)
+![AprilTag -45 Degree](docs/images/-45.png)
+![AprilTag 45 Degree](docs/images/45.png)
+![AprilTag -90 Degree](docs/images/-90.png)
+![AprilTag 90 Degree](docs/images/90.png)
+
+
+
+[ArUco tracking]
+![ArUco tracking example](docs/images/aruco_tracking.png)
+
 ## ###In Development Below - FILL/FIX ME###
 
 ### Some Notes
@@ -67,12 +81,6 @@ Alternately, you can use the supplied native Python 3 script `tag_to_svg.py` to 
 ~~~
 python ./tools/tag_to_svg.py ./markers/tag41_12_00000.png ./markers/tag41_12_00000.svg --size=50mm
 ~~~
-
-[AprilTag tracking]
-![AprilTag tracking example](docs/images/apriltag_tracking.png)
-
-[ArUco tracking]
-![ArUco tracking example](docs/images/aruco_tracking.png)
 
 ## Measurement model
 
