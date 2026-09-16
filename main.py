@@ -1,7 +1,7 @@
 # Tkinter entry point and main UI for the VisualTrackingCore proof of concept.
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from collections import deque
 
 import cv2
@@ -10,6 +10,8 @@ from PIL import Image, ImageTk
 from adapters import adapter_names, create_adapter
 from camera import Camera
 from core import ResponseResolver, TrackingEngine
+from core.camera_calibration import CameraCalibration
+from core.planar_marker_pose import ORIENTATION_CONVENTION
 from outputs import LSLOutputAdapter, LSLResponseOutputAdapter
 from overlay import draw_tracking_overlay
 
@@ -19,18 +21,24 @@ class VisualTrackingApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("VisualTrackingCore")
-        self.root.geometry("1050x760")
+        self.root.title("VisualTrackingCore V0.9.0")
+        self.root.geometry("1100x900")
 
         self.camera = Camera()
         self.adapter = None
         self.engine = TrackingEngine()
         self.running = False
+        self._after_id = None
         self.trail = deque(maxlen=50)
 
         self.solution_var = tk.StringVar(value=adapter_names()[0])
         self.camera_var = tk.StringVar(value="0")
         self.target_id_var = tk.StringVar(value="0")
+        self.mode_var = tk.StringVar(value="2D Marker Rotation")
+        self.marker_size_var = tk.StringVar(value="50.0")
+        self.camera_calibration_path_var = tk.StringVar()
+        self.camera_calibration_status_var = tk.StringVar(value="Not required in 2D mode")
+        self.response_source_var = tk.StringVar(value="Response source: Marker rotation")
         self.lsl_enabled_var = tk.BooleanVar(value=True)
         self.lsl_stream_name_var = tk.StringVar(value="VisualTrackingCore_Tracking")
         self.lsl_response_stream_name_var = tk.StringVar(value="VisualTrackingCore_Response")
@@ -110,6 +118,35 @@ class VisualTrackingApp:
             command=self.trail.clear,
         ).grid(row=0, column=8, padx=5, pady=5)
 
+        self.marker_controls = ttk.LabelFrame(self.root, text="Marker tracking", padding=10)
+        self.marker_controls.pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Label(self.marker_controls, text="Tracking Mode:").grid(row=0, column=0, sticky="w")
+        self.mode_combo = ttk.Combobox(self.marker_controls, textvariable=self.mode_var,
+                                      values=("2D Marker Rotation", "3D Pose"),
+                                      state="readonly", width=22)
+        self.mode_combo.grid(row=0, column=1, padx=5, sticky="w")
+        self.mode_combo.bind("<<ComboboxSelected>>", self._on_solution_changed)
+        ttk.Label(self.marker_controls, textvariable=self.response_source_var).grid(
+            row=0, column=2, padx=10, sticky="w")
+        self.pose_controls = ttk.Frame(self.marker_controls)
+        self.pose_controls.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(self.pose_controls, text="Tag size (mm):").grid(row=0, column=0)
+        self.marker_size_entry = ttk.Entry(self.pose_controls, textvariable=self.marker_size_var, width=8)
+        self.marker_size_entry.grid(row=0, column=1, padx=5)
+        ttk.Label(self.pose_controls, text="Calibration:").grid(row=0, column=2)
+        self.camera_calibration_entry = ttk.Entry(
+            self.pose_controls, textvariable=self.camera_calibration_path_var, width=47)
+        self.camera_calibration_entry.grid(row=0, column=3, padx=5)
+        self.camera_calibration_entry.bind("<FocusOut>", self._refresh_calibration_status)
+        self.camera_calibration_entry.bind("<Return>", self._refresh_calibration_status)
+        self.browse_calibration_button = ttk.Button(self.pose_controls, text="Browse...",
+                                                    command=self._browse_calibration)
+        self.browse_calibration_button.grid(row=0, column=4)
+        ttk.Label(self.pose_controls, textvariable=self.camera_calibration_status_var).grid(
+            row=1, column=0, columnspan=5, sticky="w", pady=3)
+        ttk.Label(self.pose_controls, text="Overhead camera; flat head-top marker, printed top toward participant's front.").grid(
+            row=2, column=0, columnspan=5, sticky="w")
+
         output_controls = ttk.LabelFrame(
             self.root,
             text="Output",
@@ -178,9 +215,8 @@ class VisualTrackingApp:
         info = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         info.pack(fill="x")
 
-        ttk.Label(info, textvariable=self.status_var).pack(side="left")
-        ttk.Label(info, text="   |   ").pack(side="left")
-        ttk.Label(info, textvariable=self.position_var).pack(side="left")
+        ttk.Label(info, textvariable=self.status_var, wraplength=1040).pack(anchor="w")
+        ttk.Label(info, textvariable=self.position_var, wraplength=1040).pack(anchor="w")
 
         self.video_label = ttk.Label(self.root)
         self.video_label.pack(fill="both", expand=True, padx=10, pady=10)
@@ -201,6 +237,36 @@ class VisualTrackingApp:
         else:
             self.target_id_entry.config(state="normal")
             self.target_id_label.config(text="Target ID:")
+        self.mode_combo.config(state="disabled" if is_mediapipe else "readonly")
+        if self._tracking_mode() == "3d_pose":
+            self.pose_controls.grid()
+            self.response_source_var.set("Response source: 3D yaw (overhead)")
+            self._refresh_calibration_status()
+        else:
+            self.pose_controls.grid_remove()
+            self.response_source_var.set("Response source: Yaw" if is_mediapipe
+                                         else "Response source: Marker rotation")
+
+    def _tracking_mode(self):
+        if self.solution_var.get() in ("AprilTag", "ArUco") and self.mode_var.get() == "3D Pose":
+            return "3d_pose"
+        return "2d_rotation"
+
+    def _browse_calibration(self):
+        path = filedialog.askopenfilename(title="Select camera calibration",
+                                         filetypes=[("NumPy calibration", "*.npz")])
+        if path:
+            self.camera_calibration_path_var.set(path)
+            self._refresh_calibration_status()
+
+    def _refresh_calibration_status(self, _event=None):
+        try:
+            calibration = CameraCalibration.load(self.camera_calibration_path_var.get())
+            self.camera_calibration_status_var.set(
+                f"Valid file | {calibration.image_width} x {calibration.image_height} | "
+                f"RMS: {calibration.reprojection_error:.3f} px | Camera checked at Start")
+        except ValueError:
+            self.camera_calibration_status_var.set("Invalid/missing calibration; select a valid .npz file.")
 
     def _parse_target_id(self):
         # Parse a numeric marker ID; blank or ``all`` means no filtering.
@@ -212,15 +278,15 @@ class VisualTrackingApp:
         return int(text)
 
     @staticmethod
-    def _response_resolver_for_solution(solution):
+    def _response_resolver_for_solution(solution, tracking_mode="2d_rotation"):
         # Overhead paper-marker trackers use in-plane marker rotation as
         # horizontal response orientation. MediaPipe provides yaw directly.
-        if solution in ("AprilTag", "ArUco"):
+        if solution in ("AprilTag", "ArUco") and tracking_mode == "2d_rotation":
             axis = "roll"
             orientation_label = "Marker rotation"
         else:
             axis = "yaw"
-            orientation_label = "Yaw"
+            orientation_label = "3D yaw (overhead)" if tracking_mode == "3d_pose" else "Yaw"
 
         return ResponseResolver(
             response_method="head_orientation",
@@ -248,6 +314,7 @@ class VisualTrackingApp:
             return
 
         solution = self.solution_var.get()
+        tracking_mode = self._tracking_mode()
 
         try:
             if solution == "MediaPipe Face":
@@ -258,17 +325,36 @@ class VisualTrackingApp:
             # All current adapters are camera-based and process frames captured
             # by VisualTrackingCore.
             camera_index = int(self.camera_var.get())
+            calibration = None
+            adapter_options = {}
+            if solution in ("AprilTag", "ArUco"):
+                adapter_options["tracking_mode"] = tracking_mode
+            if tracking_mode == "3d_pose":
+                calibration = CameraCalibration.load(self.camera_calibration_path_var.get())
+                adapter_options.update(calibration=calibration,
+                                       marker_size_mm=float(self.marker_size_var.get()))
             self.adapter = create_adapter(
                 solution,
                 target_id=target_id,
+                **adapter_options,
             )
             self.camera.open(camera_index)
+            if calibration is not None:
+                self.camera.capture.set(cv2.CAP_PROP_FRAME_WIDTH, calibration.image_width)
+                self.camera.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, calibration.image_height)
+                ok, frame = self.camera.read()
+                if not ok:
+                    raise RuntimeError("Cannot read a frame to verify calibration resolution.")
+                self.adapter.validate_frame(frame)
+                self.camera_calibration_status_var.set(
+                    f"Valid | Camera {frame.shape[1]} x {frame.shape[0]} | "
+                    f"RMS: {calibration.reprojection_error:.3f} px")
             input_text = f"Camera {camera_index}"
 
             self.engine = TrackingEngine()
             self.engine.configure_input(self.adapter)
             self.engine.configure_response_resolver(
-                self._response_resolver_for_solution(solution)
+                self._response_resolver_for_solution(solution, tracking_mode)
             )
 
             output_names = []
@@ -276,16 +362,14 @@ class VisualTrackingApp:
                 tracking_output = LSLOutputAdapter(
                     stream_name=self.lsl_stream_name_var.get(),
                     source_name=self.adapter.name,
-                    position_unit=(
-                        self.adapter.position_unit
-                        if not self.adapter.uses_camera
-                        else "px"
-                    ),
+                    position_unit=self.adapter.position_unit,
+                    metadata=self._stream_metadata(tracking_mode, calibration),
                 )
                 response_output = LSLResponseOutputAdapter(
                     stream_name=self.lsl_response_stream_name_var.get(),
                     source_name=self.adapter.name,
                     response_method="head_orientation",
+                    metadata=self._stream_metadata(tracking_mode, calibration),
                 )
                 self.engine.add_tracking_output(tracking_output)
                 self.engine.add_response_output(response_output)
@@ -322,12 +406,18 @@ class VisualTrackingApp:
         self.lsl_stream_entry.config(state="disabled")
         self.lsl_response_stream_entry.config(state="disabled")
         self.calibrate_button.config(state="normal")
+        for widget in (self.mode_combo, self.marker_size_entry, self.camera_calibration_entry,
+                       self.browse_calibration_button, self.camera_entry, self.target_id_entry):
+            widget.config(state="disabled")
 
         self._update_frame()
 
     def stop_tracking(self):
         # Stop tracking and release camera/adapter resources.
         self.running = False
+        if self._after_id is not None:
+            self.root.after_cancel(self._after_id)
+            self._after_id = None
 
         if getattr(self, "engine", None) is not None:
             self.engine.stop()
@@ -350,9 +440,27 @@ class VisualTrackingApp:
         self.lsl_stream_entry.config(state="normal")
         self.lsl_response_stream_entry.config(state="normal")
         self.calibrate_button.config(state="disabled")
+        for widget in (self.marker_size_entry, self.camera_calibration_entry,
+                       self.browse_calibration_button, self.camera_entry):
+            widget.config(state="normal")
+        self._on_solution_changed()
+
+    def _stream_metadata(self, mode, calibration):
+        metadata = {"tracking_mode": mode if self.solution_var.get() != "MediaPipe Face" else "face_pose",
+                    "orientation_convention": ORIENTATION_CONVENTION if mode == "3d_pose" else "legacy",
+                    "response_source": self.engine.response_resolver.orientation_label,
+                    "azimuth_sign": "1", "confidence_semantics": "detection_validity_not_probability"}
+        if calibration is not None:
+            metadata.update(marker_size_mm=self.marker_size_var.get(),
+                            camera_coordinates="x_right_y_down_z_away_mm",
+                            calibration_resolution=f"{calibration.image_width}x{calibration.image_height}",
+                            calibration_reprojection_error_px=str(calibration.reprojection_error),
+                            calibration_timestamp=calibration.timestamp)
+        return metadata
 
     def _update_frame(self):
         # Acquire/detect/draw one frame and schedule the next UI refresh.
+        self._after_id = None
         if not self.running:
             return
 
@@ -425,6 +533,13 @@ class VisualTrackingApp:
             else:
                 orientation_text = ""
 
+            if self._tracking_mode() == "3d_pose":
+                if result.pose_valid:
+                    orientation_text = (f" | XYZ {result.source_x:+.1f}, {result.source_y:+.1f}, "
+                                        f"{result.source_z:+.1f} mm")
+                else:
+                    orientation_text = " | 3D pose invalid"
+
             self.position_var.set(
                 f"{id_text} | "
                 f"X {result.x_px:+.0f}px | "
@@ -437,7 +552,7 @@ class VisualTrackingApp:
 
         marker_rotation_label = (
             "Marker rotation"
-            if self.solution_var.get() in ("AprilTag", "ArUco")
+            if self.solution_var.get() in ("AprilTag", "ArUco") and self._tracking_mode() == "2d_rotation"
             else None
         )
         draw_tracking_overlay(
@@ -458,7 +573,7 @@ class VisualTrackingApp:
         self.video_label.image = tk_image
 
         # Tkinter remains responsive because each iteration returns immediately.
-        self.root.after(15, self._update_frame)
+        self._after_id = self.root.after(15, self._update_frame)
 
     def on_close(self):
         # Cleanly release resources before destroying the Tk window.

@@ -24,3 +24,8 @@ class TrackingResult:
     source_x: float | None = None
     source_y: float | None = None
     source_z: float | None = None
+
+    # None means legacy 2D/face tracking; False means marker detected but no
+    # usable 3D pose. Never substitute its image angle as a 3D orientation.
+    pose_valid: bool | None = None
+    pose_reprojection_error_px: float | None = None

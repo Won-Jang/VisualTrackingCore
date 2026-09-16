@@ -15,11 +15,11 @@ import cv2
 import math
 from pupil_apriltags import Detector
 
-from adapters.base import TrackingAdapter
+from adapters.marker_base import MarkerTrackingAdapter
 from tracking_types import TrackingResult
 
 
-class AprilTagAdapter(TrackingAdapter):
+class AprilTagAdapter(MarkerTrackingAdapter):
     """
     Detect AprilTags and convert each valid detection into TrackingResult.
 
@@ -42,6 +42,9 @@ class AprilTagAdapter(TrackingAdapter):
         self,
         target_id: int | None = 0,
         family: str = "tagStandard41h12",
+        tracking_mode="2d_rotation",
+        calibration=None,
+        marker_size_mm=50.0,
     ):
         """
         Initialize the AprilTag detector.
@@ -58,7 +61,7 @@ class AprilTagAdapter(TrackingAdapter):
         """
 
         # Store common adapter settings such as target_id in the base class.
-        super().__init__(target_id=target_id)
+        super().__init__(target_id, tracking_mode, calibration, marker_size_mm)
 
         # Create the detector once when the adapter is initialized.
         # Reusing it for every frame is more efficient than rebuilding it
@@ -106,6 +109,7 @@ class AprilTagAdapter(TrackingAdapter):
 
         # AprilTag detection operates on grayscale images, while OpenCV
         # webcam frames are normally supplied in BGR format.
+        self.validate_frame(frame)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         # Run the detector for the current frame.
@@ -193,4 +197,6 @@ class AprilTagAdapter(TrackingAdapter):
 
         # Returning an empty list means the configured target was not detected
         # in this frame. Tracking-loss handling belongs to higher core layers.
-        return results
+        # Pupil/AprilTag native order is BL, BR, TR, TL in decoded tag space.
+        # Normalize to TL, TR, BR, BL only for the shared pose estimator.
+        return self.apply_pose(results, (3, 2, 1, 0))

@@ -24,10 +24,12 @@ class LSLResponseOutputAdapter(OutputAdapter):
         stream_name: str = "VisualTrackingCore_Response",
         source_name: str = "",
         response_method: str = "head_orientation",
+        metadata: dict | None = None,
     ):
         self.stream_name = stream_name.strip() or "VisualTrackingCore_Response"
         self.source_name = source_name
         self.response_method = response_method
+        self.metadata = metadata or {}
         self.outlet = None
         self._local_clock = None
 
@@ -55,6 +57,8 @@ class LSLResponseOutputAdapter(OutputAdapter):
         desc.append_child_value("response_method", self.response_method)
         desc.append_child_value("coordinate_reference", "calibrated_speaker_array")
         desc.append_child_value("azimuth_zero", "calibrated_forward_center")
+        for key, value in self.metadata.items():
+            desc.append_child_value(key, str(value))
 
         channels = desc.append_child("channels")
         for label, unit in self.CHANNELS:

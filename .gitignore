@@ -41,3 +41,7 @@ desktop.ini
 # Downloaded MediaPipe model (downloaded automatically at runtime)
 models/*.task
 !models/.gitkeep
+
+# Camera-specific calibration and locally generated print boards
+calibration/*.npz
+calibration/*.png

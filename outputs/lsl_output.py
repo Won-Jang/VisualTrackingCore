@@ -29,11 +29,13 @@ class LSLOutputAdapter(OutputAdapter):
         stream_type: str = "TrackingPose",
         source_name: str = "",
         position_unit: str = "unknown",
+        metadata: dict | None = None,
     ):
         self.stream_name = stream_name.strip() or "VisualTrackingCore_Tracking"
         self.stream_type = stream_type
         self.source_name = source_name
         self.position_unit = position_unit
+        self.metadata = metadata or {}
         self.outlet = None
         self._local_clock = None
 
@@ -60,6 +62,8 @@ class LSLOutputAdapter(OutputAdapter):
         desc.append_child_value("source_adapter", self.source_name)
         desc.append_child_value("position_unit", self.position_unit)
         desc.append_child_value("data_role", "raw_normalized_tracking")
+        for key, value in self.metadata.items():
+            desc.append_child_value(key, str(value))
 
         channels = desc.append_child("channels")
         for label, unit in self.CHANNELS:

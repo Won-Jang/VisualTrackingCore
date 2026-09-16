@@ -71,6 +71,12 @@ def draw_tracking_overlay(frame, result, trail=None, orientation_label=None):
             f"X: {result.x_px:+.0f}px   Y: {result.y_px:+.0f}px",
         ]
 
+        if getattr(result, "pose_valid", None) is False:
+            lines.append("3D pose invalid")
+        elif getattr(result, "pose_valid", None) is True:
+            lines.append(f"XYZ: {result.source_x:+.1f}, {result.source_y:+.1f}, "
+                         f"{result.source_z:+.1f} mm")
+
         if orientation_label is not None:
             lines.append(
                 f"{orientation_label}: {result.angle_deg:+.1f} deg"

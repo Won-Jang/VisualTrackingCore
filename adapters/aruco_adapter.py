@@ -18,11 +18,11 @@ import cv2
 import math
 import numpy as np
 
-from adapters.base import TrackingAdapter
+from adapters.marker_base import MarkerTrackingAdapter
 from tracking_types import TrackingResult
 
 
-class ArUcoAdapter(TrackingAdapter):
+class ArUcoAdapter(MarkerTrackingAdapter):
     """
     Detect OpenCV ArUco markers and return normalized tracking results.
 
@@ -55,6 +55,9 @@ class ArUcoAdapter(TrackingAdapter):
         self,
         target_id: int | None = 0,
         dictionary_id: int = cv2.aruco.DICT_4X4_50,
+        tracking_mode="2d_rotation",
+        calibration=None,
+        marker_size_mm=50.0,
     ):
         """
         Initialize the ArUco detector.
@@ -82,7 +85,7 @@ class ArUcoAdapter(TrackingAdapter):
         """
 
         # Initialize common adapter settings, including target_id.
-        super().__init__(target_id=target_id)
+        super().__init__(target_id, tracking_mode, calibration, marker_size_mm)
 
         # Load the predefined ArUco dictionary.
         #
@@ -142,6 +145,7 @@ class ArUcoAdapter(TrackingAdapter):
         #     Candidate regions that looked like markers but could not be
         #     decoded. We do not currently use these, but they can be useful
         #     later when debugging detection quality.
+        self.validate_frame(frame)
         corners, ids, _rejected = self.detector.detectMarkers(frame)
 
         # OpenCV returns ids=None when no valid ArUco markers are detected.
@@ -283,4 +287,4 @@ class ArUcoAdapter(TrackingAdapter):
         # Tracking-loss handling is intentionally left to the higher-level
         # VisualTrackingCore engine rather than being implemented separately
         # inside each adapter.
-        return results
+        return self.apply_pose(results, (0, 1, 2, 3))

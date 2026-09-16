@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from core.localization_response import LocalizationResponse
 from core.tracking_frame import TrackingFrame
 
@@ -28,7 +30,7 @@ class ResponseResolver:
     ):
         if orientation_axis not in {"yaw", "pitch", "roll"}:
             raise ValueError("orientation_axis must be yaw, pitch, or roll")
-        if sign == 0:
+        if not math.isfinite(sign) or sign == 0:
             raise ValueError("sign must be non-zero")
 
         self.response_method = response_method
@@ -36,6 +38,7 @@ class ResponseResolver:
         self.sign = 1.0 if sign > 0 else -1.0
         self.orientation_label = orientation_label or orientation_axis.capitalize()
         self.reference_deg: float | None = None
+        self.reference_identity = None
 
     @property
     def calibrated(self) -> bool:
@@ -50,19 +53,22 @@ class ResponseResolver:
             raise ValueError("Cannot calibrate while tracking is invalid.")
 
         value = self._orientation_value(frame)
-        if value is None:
+        if value is None or not math.isfinite(value):
             raise ValueError(
                 f"Current adapter does not provide {self.orientation_axis} orientation."
             )
 
         self.reference_deg = float(value)
+        self.reference_identity = (frame.source, frame.target_id)
         return self.reference_deg
 
     def clear_reference(self) -> None:
         self.reference_deg = None
+        self.reference_identity = None
 
     def resolve(self, frame: TrackingFrame) -> LocalizationResponse:
-        if not frame.tracking_valid or not self.calibrated:
+        if (not frame.tracking_valid or not self.calibrated
+                or (frame.source, frame.target_id) != self.reference_identity):
             return LocalizationResponse.invalid(
                 source=frame.source,
                 response_method=self.response_method,
@@ -70,14 +76,14 @@ class ResponseResolver:
             )
 
         value = self._orientation_value(frame)
-        if value is None:
+        if value is None or not math.isfinite(value):
             return LocalizationResponse.invalid(
                 source=frame.source,
                 response_method=self.response_method,
                 target_id=frame.target_id,
             )
 
-        azimuth = self.sign * wrap_degrees(float(value) - self.reference_deg)
+        azimuth = wrap_degrees(self.sign * (float(value) - self.reference_deg))
 
         return LocalizationResponse(
             timestamp=frame.timestamp,
