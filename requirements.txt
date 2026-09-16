@@ -1,6 +1,12 @@
-opencv-contrib-python>=4.8
-numpy
+opencv-contrib-python>=4.8; sys_platform != "darwin"
+# MediaPipe 0.10.21 needs NumPy 1.x; OpenCV 4.12+ needs NumPy 2 on modern Python.
+opencv-contrib-python==4.11.0.86; sys_platform == "darwin"
+numpy; sys_platform != "darwin"
+numpy<2; sys_platform == "darwin"
 pillow
 pupil-apriltags
-mediapipe>=1.0.1
+mediapipe>=1.0.1; sys_platform != "darwin"
+# macOS native graph abort in 1.0.x: google-ai-edge/mediapipe#6356.
+# Use Python 3.11 on Mac (0.10.21 has no Python 3.13/3.14 wheel).
+mediapipe==0.10.21; sys_platform == "darwin"
 pylsl

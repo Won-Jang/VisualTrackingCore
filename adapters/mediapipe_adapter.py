@@ -1,6 +1,7 @@
 # MediaPipe Face Landmarker adapter for markerless head tracking.
 
 import math
+import platform
 import time
 import urllib.request
 from pathlib import Path
@@ -57,6 +58,8 @@ class MediaPipeFaceAdapter(TrackingAdapter):
         # Preserve the common factory signature. MediaPipe tracks one face
         # and reports it internally as ID 0.
         super().__init__(target_id=0)
+        self.landmarker = None
+        self._validate_runtime()
 
         if model_path is None:
             model_path = (
@@ -69,7 +72,8 @@ class MediaPipeFaceAdapter(TrackingAdapter):
         self._ensure_model()
 
         base_options = mp.tasks.BaseOptions(
-            model_asset_path=str(self.model_path)
+            model_asset_path=str(self.model_path),
+            delegate=mp.tasks.BaseOptions.Delegate.CPU,
         )
         options = mp.tasks.vision.FaceLandmarkerOptions(
             base_options=base_options,
@@ -84,6 +88,31 @@ class MediaPipeFaceAdapter(TrackingAdapter):
             options
         )
         self._last_timestamp_ms = 0
+
+    @staticmethod
+    def _validate_runtime():
+        """Fail in Python before macOS enters the aborting native graph.
+
+        Explicit CPU alone does not fix the 1.0.x Metal-service regression:
+        https://github.com/google-ai-edge/mediapipe/issues/6356
+        Keep this check synchronized with the macOS pin in requirements.txt.
+        Other adapters can still start when this runtime check rejects Face.
+        """
+        version = getattr(mp, "__version__", "unknown")
+        if platform.system() == "Darwin" and version != "0.10.21":
+            raise RuntimeError(
+                f"MediaPipe {version} is not supported by this project's macOS setup.\n"
+                "MediaPipe 1.0.x can terminate the application with a native Metal "
+                "service error, even in CPU mode.\n\n"
+                "Use Python 3.11 and the macOS dependencies from requirements.txt.\n"
+                "From the project folder, create a separate environment:\n"
+                "python3.11 -m venv .venv-mac\n"
+                "source .venv-mac/bin/activate\n"
+                "python -m pip install --upgrade pip\n"
+                "python -m pip install -r requirements.txt\n"
+                "python main.py\n\n"
+                "This installs MediaPipe 0.10.21. The previous environment is preserved."
+            )
 
     def _ensure_model(self) -> None:
         # Download the Face Landmarker model on first use when necessary.

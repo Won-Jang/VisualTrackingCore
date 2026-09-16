@@ -29,10 +29,47 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-For a new environment, use Python 3.13, `python -m venv .venv`, then activate
-with `.\.venv\Scripts\Activate.ps1` on Windows or `source .venv/bin/activate`
-on macOS. OpenCV 4.8+ is required for the ChArUco API; this milestone was tested
-with OpenCV 5.0.0 on Windows. Camera/backend behavior on macOS needs hardware testing.
+On Windows, use Python 3.13, `python -m venv .venv`, then activate with
+`.\.venv\Scripts\Activate.ps1`. OpenCV 4.8+ is required for the ChArUco API;
+this milestone was tested with OpenCV 5.0.0 on Windows.
+
+### macOS setup and MediaPipe crash workaround
+
+Use **Python 3.11** for the macOS environment. From the updated project folder:
+
+```bash
+python3.11 -m venv .venv-mac
+source .venv-mac/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip check
+python main.py
+```
+
+If `python3.11` is not found, install Python 3.11 with Tk support first. Creating
+`.venv-mac` leaves any existing `.venv` untouched. Activate `.venv-mac` each time
+you run the app or calibration tools on this Mac. If this new environment already
+exists, reuse it only if it was created with Python 3.11.
+
+The shared requirements file selects dependencies by operating system:
+
+- Windows retains MediaPipe 1.0.1 or newer and its existing OpenCV/NumPy path.
+- macOS uses MediaPipe 0.10.21, OpenCV 4.11.0.86, and NumPy below 2. This avoids
+  installing incompatible NumPy/OpenCV versions alongside the older MediaPipe.
+
+The `DrishtiMetalHelper` / `Service is unavailable` / `Abort trap: 6` failure
+matches [MediaPipe issue #6356](https://github.com/google-ai-edge/mediapipe/issues/6356).
+That report describes a native macOS graph initialization regression and a working
+0.10.21/Python 3.11 workaround. Selecting CPU alone does not fix the affected
+build. This adapter explicitly selects CPU and rejects macOS MediaPipe versions
+outside the project pin **before** constructing the native graph, showing setup
+instructions instead. A Python exception handler cannot recover a native abort.
+
+The fallback is based on the upstream report; it still needs verification on
+your Mac. Use a Python build native to your Mac's architecture, and allow camera
+access for the terminal/application when macOS requests it. Camera calibration
+files should be created for the actual camera/setup, not copied between sites
+without checking the camera, focus, and resolution.
 
 ### Calibrate the camera
 
