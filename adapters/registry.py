@@ -10,6 +10,7 @@ ADAPTERS = {
     AprilTagAdapter.name: AprilTagAdapter,
     ArUcoAdapter.name: ArUcoAdapter,
     MediaPipeFaceAdapter.name: MediaPipeFaceAdapter,
+    "PointTracker - IR": None,  # Reserved dropdown entry; no tracking implementation yet.
 }
 
 
@@ -25,4 +26,6 @@ def create_adapter(name: str, target_id: int | None = 0, **kwargs):
     except KeyError as exc:
         raise ValueError(f"Unknown adapter: {name}") from exc
 
+    if adapter_class is None:
+        raise NotImplementedError(f"{name} is not implemented yet.")
     return adapter_class(target_id=target_id, **kwargs)

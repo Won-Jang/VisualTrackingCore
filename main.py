@@ -231,6 +231,16 @@ class VisualTrackingApp:
         self.input_label.config(text="Camera index:")
         self.camera_entry.grid()
 
+        if solution == "PointTracker - IR":
+            self.camera_entry.config(state="disabled")
+            self.target_id_entry.config(state="disabled")
+            self.target_id_label.config(text="Target ID: (N/A)")
+            self.mode_combo.config(state="disabled")
+            self.pose_controls.grid_remove()
+            self.response_source_var.set("PointTracker - IR: not implemented yet")
+            return
+        self.camera_entry.config(state="normal")
+
         if is_mediapipe:
             self.target_id_entry.config(state="disabled")
             self.target_id_label.config(text="Target ID: (N/A)")
@@ -315,6 +325,10 @@ class VisualTrackingApp:
 
         solution = self.solution_var.get()
         tracking_mode = self._tracking_mode()
+
+        if solution == "PointTracker - IR":
+            messagebox.showinfo("Not implemented yet", "PointTracker - IR is a placeholder. Tracking is not implemented yet.")
+            return
 
         try:
             if solution == "MediaPipe Face":
